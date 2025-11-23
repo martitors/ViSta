@@ -88,4 +88,4 @@ v.averaging(v.concat_file, output_ms="stacked.avg.ms")
 imaging_uvmultifit("stacked.avg.ms")
 ```
 
----# ViSta
+---
