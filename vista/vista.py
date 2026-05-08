@@ -307,14 +307,14 @@ class ViSta:
             for the requested field in the specified frame.
         """
         _assert_all_exist([ms_path], "get_ms_phasecenter")
-        self.tb.open(f"{ms_path}/FIELD")
-        pd = self.tb.getcol("PHASE_DIR")
+        self.tb.open(f"{ms_path}/SOURCE")
+        pd = self.tb.getcol("DIRECTION")
         self.tb.close()
-        ra = np.degrees(pd[0][field_id][0]) / 15.0
-        dec = np.degrees(pd[1][field_id][0])
+        ra = np.degrees(pd[0][0]) / 15.0
+        dec = np.degrees(pd[1][0])
         return SkyCoord(ra, dec, unit=(u.hourangle, u.deg), frame=frame)
 
-    def centering(self, rest_frequency=None):
+    def centering(self, rest_frequency=None,pointing=False):
         """
         Description:
             Shift the phase center of each Measurement Set to the RA/Dec
@@ -372,13 +372,13 @@ class ViSta:
                 self.tb.flush()
                 self.tb.close()
                 
-
-            self.tb.open(f"{out_file}/POINTING", nomodify=False)
-            for col in ["DIRECTION", "TARGET"]:
-                v = self.tb.getcol(col) * 0
-                self.tb.putcol(col, v)
-            self.tb.flush()
-            self.tb.close()
+            if pointing:
+                self.tb.open(f"{out_file}/POINTING", nomodify=False)
+                for col in ["DIRECTION", "TARGET"]:
+                    v = self.tb.getcol(col) * 0
+                    self.tb.putcol(col, v)
+                self.tb.flush()
+                self.tb.close()
             
 
         self._update_ms_list(".center")
@@ -394,49 +394,49 @@ class ViSta:
         Description:
             Rebin all Measurement Sets to the same spectral resolution and
             same number of channels, centered around central_freq as closely
-            as possible.
-    
+            as possible.    
+
         Inputs:
             central_freq: Central frequency in Hz.
             spw: Spectral window index to use (default 0).
             nn: Number of final channels (if None, the smallest even number
                 from all MSs is used).
-    
+
         Outputs:
             Creates new Measurement Sets with suffix ".rebin", all rebinned
             to the same spectral resolution and channel count, and updates
             ms_list to reference the rebinned versions.
         """
-    
+
         _assert_all_exist(self.ms_list, "rebinning")
-        
+
         if central_freq is None:
-    	    raise ValueError("central_freq is required for rebinning()")
-       
+            raise ValueError("central_freq is required for rebinning()")    
+
         print("\n[ViSta] === STEP 1: Collecting spectral information from MS ===")
-    
+
         spectral_res_list = []
         nchan_list = []
         freq_ranges = []
         old_list = list(self.ms_list)
-    	
+
         for ms in old_list:
             spw_table = f"{ms}/SPECTRAL_WINDOW"
             self.tb.open(spw_table)
-    
+
             chan_freqs = self.tb.getcol("CHAN_FREQ").T[0]
             chan_widths = self.tb.getcol("CHAN_WIDTH").T[0]
+
             self.tb.close()
-    
+
             spectral_res = abs(chan_widths[0])
             spectral_res_list.append(spectral_res)
             nchan_list.append(len(chan_freqs))
             freq_ranges.append((chan_freqs.min(), chan_freqs.max()))
-    
-    
+
         spectral_res = max(spectral_res_list)
         print(f"[ViSta] Maximum spectral resolution among MS = {spectral_res:.2f} Hz")
-    
+
         if nn is None:
             nn = min(nchan_list)
             if nn % 2 != 0:
@@ -444,47 +444,59 @@ class ViSta:
         else:
             if nn > min(nchan_list):
                 raise ValueError("nn is too large for the smallest MS.")
-    
+
         print(f"[ViSta] Final number of channels (nn) = {nn}")
         print(f"[ViSta] Channel width (spectral_res) = {spectral_res:.2f} Hz")
-    
-        start_ideal = central_freq - spectral_res * nn / 2
-        end_ideal   = central_freq + spectral_res * nn / 2
+
+        bandwidth = nn * spectral_res
+        start_ideal = central_freq - bandwidth / 2
+        end_ideal = central_freq + bandwidth / 2
+
         print(f"[ViSta] Ideal start: {start_ideal:.3e}, ideal end: {end_ideal:.3e}\n")
-    
+
         print("[ViSta] === STEP 2: Rebinning each MS ===")
-    
-        new_list = []
-    
+
         for i, ms in enumerate(self.ms_list):
             msmin, msmax = freq_ranges[i]
-            start, end = start_ideal, end_ideal
-    
+
             print(f"\n[ViSta] --- Processing {ms} ---")
             print(f"[ViSta] Original MS range: ({msmin:.3e}, {msmax:.3e})")
-            print(f"[ViSta] Start/End BEFORE shift: {start:.3e}, {end:.3e}")
-    
-            if start < msmin:
-                nstep = int(np.ceil((msmin - start) / spectral_res))
-                start += nstep * spectral_res
-                end = start + nn * spectral_res
-                
-    
-            if end > msmax:
-                nstep = int(np.ceil((end - msmax) / spectral_res))
-                start -= nstep * spectral_res
-                end = start + nn * spectral_res
-                
-    
-            print(f"[ViSta] Start/End FINAL:  {start:.3e}, {end:.3e}")
-           
-    
+            print(f"[ViSta] Ideal window: ({start_ideal:.3e}, {end_ideal:.3e})")
+
+            if (start_ideal >= msmin) and (end_ideal <= msmax):
+                start = start_ideal
+                reason = "ideal window fits"
+
+            elif msmin > start_ideal:
+                start = msmin
+                reason = "shifted to left MS boundary"
+
+            elif msmax < end_ideal:
+                start = msmax - bandwidth
+                reason = "shifted to right MS boundary"
+
+            else:
+                raise RuntimeError(
+                    f"[ViSta] Unexpected window logic failure for MS {ms}"
+                )
+
+            end = start + bandwidth
+            center = 0.5 * (start + end)
+            offset = center - central_freq
+
+            print(f"[ViSta] Start/End FINAL: {start:.3e}, {end:.3e}")
+            print(f"[ViSta] Reason: {reason}")
+            print(f"[ViSta] Center offset: {offset:+.3e} Hz")
+
             out_file = f"{ms}.rebin"
-    
+
             if os.path.exists(out_file):
                 print(f"[ViSta] WARNING: {out_file} already exists! Skipping.\n")
                 continue
-    
+
+            # =========================
+            # REGRID MS
+            # =========================
             self.mstransform(
                 vis=ms,
                 outputvis=out_file,
@@ -496,16 +508,41 @@ class ViSta:
                 start=f"{start}Hz",
                 width=f"{int(spectral_res)}Hz"
             )
-    
-            print(f"[ViSta] Rebinning completed → output: {out_file}\n")    
-      
+
+            # =========================
+            # SCALE WEIGHT / SIGMA
+            # =========================
+
+            self.tb.open(f"{ms}/SPECTRAL_WINDOW")
+            old_chan_width = abs(self.tb.getcol("CHAN_WIDTH").T[0][0])
+            self.tb.close()
+
+            new_chan_width = spectral_res
+            R = new_chan_width / old_chan_width
+
+            print(f"[ViSta] Scaling WEIGHT/SIGMA with R = {R:.6f}")
+
+            self.tb.open(out_file, nomodify=False)
+
+            w = self.tb.getcol("WEIGHT")
+            w = w * R
+            self.tb.putcol("WEIGHT", w)
+
+            s = self.tb.getcol("SIGMA")
+            s = s / (R ** 0.5)
+            self.tb.putcol("SIGMA", s)
+
+            self.tb.close()
+
+            print(f"[ViSta] Rebinning completed → output: {out_file}\n")
+
         self._update_ms_list(".rebin")
         self.big_res = nn
 
         if self.clean_previous:
             for ms in old_list:
                 self._safe_remove(ms)
-   
+
         print("[ViSta] ✔ Rebinning step completed.\n")
 
 
@@ -613,7 +650,25 @@ class ViSta:
 
         self.tb.flush()
         self.tb.close()
-
+        
+    def primary_beam_from_centers( self, index, d, nu_rest, c = 3e8 ): 
+        """ Compute angular separation and primary-beam attenuation using the 
+        original phase center and RA/Dec from input ( no conversions ). """ 
+        
+        nu = nu_rest / self.z_list[ index ] 
+        old = self.original_phasecenters[ index ] 
+        new = SkyCoord( 
+              self.ra_list[ index ],
+              self.dec_list[ index ],
+              unit = ( u.hourangle, u.deg ),
+              frame = "icrs" 
+              )
+        theta = old.separation( new ).to( u.rad ).value 
+        pb = np.exp( -4 * np.log( 2 ) * ( ( theta * nu * d ) / ( 1.2 * c ) ) ** 2 ) 
+        
+        return theta, pb
+        
+        
     def stacking(
         self,
         output_ms="stacked.ms",
@@ -683,7 +738,7 @@ class ViSta:
             for i, ms in enumerate(self.ms_list):
                 theta, pb = self.primary_beam_from_centers(
                     index=i,
-                    nu=nu_pb,
+                    nu_rest=nu_pb,
                     d=dish_diameter
                 )
                 if pb <= 0:
@@ -698,7 +753,8 @@ class ViSta:
         keys = [(ra.strip(), dec.strip())
                 for ra, dec in zip(self.ra_list, self.dec_list)]
         counts = Counter(keys)
-
+        print(keys,counts)
+	
         visweightscale = []
         for key in keys:
             n = counts[key]
@@ -710,7 +766,8 @@ class ViSta:
             vis=self.ms_list,
             freqtol=freqtolerance,
             concatvis=output_ms,
-            visweightscale=visweightscale
+            visweightscale=visweightscale,
+            copypointing=False
         )
 
         if coverage_weighting:
@@ -754,7 +811,7 @@ class ViSta:
                 print(f"[ViSta]   WARNING: '{combined}' exists → skipping SPW combine.")
             else:
                 print(f"[ViSta]   Combining all SPWs → '{combined}'")
-                self.mstransform(vis=ms, outputvis=combined, datacolumn='all', combinespw=True)
+                self.mstransform(vis=ms, outputvis=combined, datacolumn='all', combinespws=True)
             ms = combined
 
         self.tb.open(f"{ms}/OBSERVATION", nomodify=False)
