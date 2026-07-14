@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> ### A new optimized version of ViSta is available: ViSta-HPC.
+> 
+> This release delivers a **>10×** performance improvement over the original implementation. The CASA-based pipeline has been replaced by a self-contained Python package powered by a compiled C++/OpenMP backend with optional CUDA GPU acceleration.  
+> **Repository:** https://github.com/martitors/ViSta-HPC
+
 # ViSta — Visibility Stacking for Interferometric Data
 
 **ViSta** is a visibility-domain stacking pipeline for interferometric radio and
