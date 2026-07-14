@@ -423,9 +423,9 @@ class ViSta:
         for ms in old_list:
             spw_table = f"{ms}/SPECTRAL_WINDOW"
             self.tb.open(spw_table)
-
-            chan_freqs = self.tb.getcol("CHAN_FREQ").T[0]
-            chan_widths = self.tb.getcol("CHAN_WIDTH").T[0]
+			
+            chan_freqs = self.tb.getcell("CHAN_FREQ", spw)
+			chan_widths = self.tb.getcell("CHAN_WIDTH", spw)
 
             self.tb.close()
 
